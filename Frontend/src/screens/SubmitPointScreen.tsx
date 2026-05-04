@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -16,17 +16,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CityDictionarySelect } from '../components/CityDictionarySelect';
 import { FormImageAttachment } from '../components/FormImageAttachment';
 import { LocationMapPicker } from '../components/LocationMapPicker';
-import { api, apiErrorMessage } from '../lib/api';
+import { api, apiErrorMessage, apiPostFormData } from '../lib/api';
 import { alertOk } from '../lib/platformAlert';
+import { computeCollectionPointFieldErrors } from '../lib/collectionPointFormRules';
+import { sanitizeMeetupPhoneDigits } from '../lib/meetupFormRules';
 import type { ProfileStackParamList } from '../navigation/profileStackTypes';
-import {
-  cascadingWhite,
-  crunch,
-  dreamland,
-  lead,
-  textSecondary,
-  warmHaze,
-} from '../theme/colors';
+import { dreamland, lead, textSecondary, warmHaze, themePageBg, themePrimary, themeSurfaceMuted } from '../theme/colors';
 import { FORM_SCROLL_GAP } from '../theme/formLayout';
 import { cardShadow } from '../theme/shadows';
 import type { CollectionPoint } from '../types/point';
@@ -47,14 +42,25 @@ export function SubmitPointScreen({ navigation, route }: Props) {
   const [name, setName] = useState('');
   const [city, setCity] = useState('');
   const [address, setAddress] = useState('');
-  const [association, setAssociation] = useState('');
-  const [operatingHours, setOperatingHours] = useState('');
   const [contactNumber, setContactNumber] = useState('');
   const [existingPhotoUrl, setExistingPhotoUrl] = useState<string>('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoMime, setPhotoMime] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(isEdit);
+  const [mapPickerEpoch, setMapPickerEpoch] = useState(0);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const lastBootEditId = useRef<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const clearFieldError = (key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!isEdit || !editingId) return;
@@ -68,9 +74,7 @@ export function SubmitPointScreen({ navigation, route }: Props) {
         setName(p.name ?? '');
         setCity(p.city ?? '');
         setAddress(p.address ?? '');
-        setAssociation(p.association ?? '');
-        setOperatingHours(p.operatingHours ?? '');
-        setContactNumber(p.contactNumber ?? '');
+        setContactNumber(sanitizeMeetupPhoneDigits(p.contactNumber ?? ''));
         setExistingPhotoUrl(p.locationPhoto ?? '');
         if (typeof p.latitude === 'number') setPinLat(p.latitude);
         if (typeof p.longitude === 'number') setPinLng(p.longitude);
@@ -84,6 +88,18 @@ export function SubmitPointScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [isEdit, editingId]);
+
+  useEffect(() => {
+    if (!isEdit || !editingId) {
+      lastBootEditId.current = null;
+      return;
+    }
+    if (loading) return;
+    if (lastBootEditId.current !== editingId) {
+      lastBootEditId.current = editingId;
+      setMapPickerEpoch((e) => e + 1);
+    }
+  }, [isEdit, editingId, loading]);
 
   const pick = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -120,15 +136,13 @@ export function SubmitPointScreen({ navigation, route }: Props) {
     } else {
       form.append('locationPhoto', { uri: photoUri, name: fname, type } as unknown as Blob);
     }
-    const up = await api.post<{ url: string }>('/api/upload/location', form);
-    return up.data.url ?? '';
+    const { data } = await apiPostFormData('/api/upload/location', form);
+    const payload = data as { url?: string };
+    return payload.url ?? '';
   };
 
   const submit = async () => {
-    if (!name.trim() || !city.trim() || !address.trim()) {
-      alertOk('Required', 'Name, city, and address are required.');
-      return;
-    }
+    const nextErrors = computeCollectionPointFieldErrors({ name, city, address, contactNumber });
     if (
       !Number.isFinite(pinLat) ||
       !Number.isFinite(pinLng) ||
@@ -140,17 +154,22 @@ export function SubmitPointScreen({ navigation, route }: Props) {
       alertOk('Map', 'Choose a location on the map by tapping or dragging the pin.');
       return;
     }
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      return;
+    }
+    setFieldErrors({});
     setBusy(true);
     try {
       const uploaded = await uploadPhoto();
       const locationPhoto = uploaded ?? existingPhotoUrl ?? '';
+      const contactDigits = sanitizeMeetupPhoneDigits(contactNumber);
       const payload = {
         name: name.trim(),
         city: city.trim(),
         address: address.trim(),
-        association: association.trim(),
-        operatingHours: operatingHours.trim(),
-        contactNumber: contactNumber.trim(),
+        contactNumber: contactDigits,
         locationPhoto,
         latitude: pinLat,
         longitude: pinLng,
@@ -172,7 +191,7 @@ export function SubmitPointScreen({ navigation, route }: Props) {
   if (loading) {
     return (
       <View style={[styles.flex, styles.center]}>
-        <ActivityIndicator color={crunch} />
+        <ActivityIndicator color={themePrimary} />
       </View>
     );
   }
@@ -186,6 +205,7 @@ export function SubmitPointScreen({ navigation, route }: Props) {
         </Pressable>
       </View>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[styles.scroll, { gap: FORM_SCROLL_GAP }]}
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
@@ -198,6 +218,7 @@ export function SubmitPointScreen({ navigation, route }: Props) {
           The pin marks where exchanges happen. Tap the map or drag the pin — required before you save.
         </Text>
         <LocationMapPicker
+          key={`map-${mapPickerEpoch}`}
           latitude={pinLat}
           longitude={pinLng}
           onChange={(lat, lng) => {
@@ -206,12 +227,49 @@ export function SubmitPointScreen({ navigation, route }: Props) {
           }}
         />
         <Text style={styles.detailsTitle}>Place details</Text>
-        <Field label="Name" value={name} onChange={setName} />
-        <CityDictionarySelect value={city} onChange={setCity} />
-        <Field label="Address" value={address} onChange={setAddress} multiline />
-        <Field label="Association (optional)" value={association} onChange={setAssociation} />
-        <Field label="Hours (optional)" value={operatingHours} onChange={setOperatingHours} />
-        <Field label="Contact (optional)" value={contactNumber} onChange={setContactNumber} />
+        <Field
+          label="Name"
+          required
+          value={name}
+          error={fieldErrors.name}
+          onChangeText={(t) => {
+            setName(t);
+            clearFieldError('name');
+          }}
+        />
+        <CityDictionarySelect
+          value={city}
+          onChange={(c) => {
+            setCity(c);
+            clearFieldError('city');
+          }}
+          error={fieldErrors.city}
+        />
+        <Field
+          label="Address"
+          required
+          value={address}
+          error={fieldErrors.address}
+          onChangeText={(t) => {
+            setAddress(t);
+            clearFieldError('address');
+          }}
+          multiline
+        />
+        <Field
+          label="Contact number"
+          required
+          value={contactNumber}
+          error={fieldErrors.contactNumber}
+          onChangeText={(t) => {
+            setContactNumber(sanitizeMeetupPhoneDigits(t));
+            clearFieldError('contactNumber');
+          }}
+          placeholder="10 digits — e.g. 0770123456"
+          keyboardType="number-pad"
+          maxLength={10}
+          inputMode="numeric"
+        />
         <FormImageAttachment
           previewUri={photoUri || existingPhotoUrl}
           onPick={pick}
@@ -237,30 +295,52 @@ export function SubmitPointScreen({ navigation, route }: Props) {
 function Field({
   label,
   value,
-  onChange,
+  onChangeText,
   multiline,
+  error,
+  required,
+  placeholder,
+  keyboardType,
+  maxLength,
+  inputMode,
 }: {
   label: string;
   value: string;
-  onChange: (t: string) => void;
+  onChangeText: (t: string) => void;
   multiline?: boolean;
+  error?: string;
+  required?: boolean;
+  placeholder?: string;
+  keyboardType?: 'default' | 'number-pad' | 'phone-pad';
+  maxLength?: number;
+  inputMode?: 'numeric' | 'text';
 }) {
   return (
     <View style={{ width: '100%', gap: 6 }}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.label}>
+        {label}
+        {required ? <Text style={styles.reqMark}> *</Text> : null}
+      </Text>
       <TextInput
         value={value}
-        onChangeText={onChange}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
         placeholderTextColor={warmHaze}
-        style={[styles.input, multiline && styles.inputMultiline]}
+        style={[styles.input, multiline && styles.inputMultiline, error && styles.inputInvalid]}
         multiline={multiline}
+        keyboardType={keyboardType}
+        maxLength={maxLength}
+        inputMode={inputMode}
+        autoCapitalize={keyboardType === 'number-pad' ? 'none' : 'sentences'}
+        autoCorrect={keyboardType !== 'number-pad'}
       />
+      {error ? <Text style={styles.fieldErrorTxt}>{error}</Text> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: cascadingWhite },
+  flex: { flex: 1, backgroundColor: themePageBg },
   center: { alignItems: 'center', justifyContent: 'center' },
   topBar: { paddingHorizontal: 12, paddingBottom: 4 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start' },
@@ -270,9 +350,10 @@ const styles = StyleSheet.create({
   mapSectionTitle: { fontSize: 17, fontWeight: '800', color: lead, marginTop: 4 },
   mapSectionSub: { fontSize: 14, color: textSecondary, lineHeight: 20 },
   detailsTitle: { fontSize: 15, fontWeight: '800', color: lead, marginTop: 8 },
+  reqMark: { color: '#b3261e', fontWeight: '800' },
   label: { fontSize: 13, fontWeight: '700', color: warmHaze },
   input: {
-    backgroundColor: '#f3f3f5',
+    backgroundColor: themeSurfaceMuted,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
@@ -282,9 +363,11 @@ const styles = StyleSheet.create({
     color: lead,
   },
   inputMultiline: { minHeight: 72, textAlignVertical: 'top', marginBottom: 2 },
+  inputInvalid: { borderColor: '#b3261e', borderWidth: 1 },
+  fieldErrorTxt: { fontSize: 13, fontWeight: '600', color: '#b3261e' },
   submit: {
     marginTop: 8,
-    backgroundColor: crunch,
+    backgroundColor: themePrimary,
     borderRadius: 20,
     paddingVertical: 16,
     alignItems: 'center',
