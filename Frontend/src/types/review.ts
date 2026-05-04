@@ -9,4 +9,8 @@ export type Review = {
   evidencePhoto?: string;
   flagged?: boolean;
   createdAt?: string;
+<<<<<<< ChathukaPehesara
 };
+=======
+};
+>>>>>>> main
