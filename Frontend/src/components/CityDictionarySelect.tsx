@@ -11,14 +11,16 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLLECTION_POINT_CITIES } from '../constants/collectionPointCities';
-import { cascadingWhite, crunch, dreamland, lead, textSecondary, warmHaze } from '../theme/colors';
+import { cascadingWhite, dreamland, lead, textSecondary, themePrimary, themeSurfaceMuted, warmHaze } from '../theme/colors';
 
 type Props = {
   value: string;
   onChange: (city: string) => void;
+  /** Inline validation message; also styles the trigger. */
+  error?: string | null;
 };
 
-export function CityDictionarySelect({ value, onChange }: Props) {
+export function CityDictionarySelect({ value, onChange, error }: Props) {
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -45,7 +47,11 @@ export function CityDictionarySelect({ value, onChange }: Props) {
       <Text style={styles.label}>City</Text>
       <Pressable
         onPress={() => setOpen(true)}
-        style={({ pressed }) => [styles.trigger, pressed && styles.triggerPressed]}
+        style={({ pressed }) => [
+          styles.trigger,
+          error ? styles.triggerError : null,
+          pressed && styles.triggerPressed,
+        ]}
         accessibilityRole="button"
         accessibilityLabel="Select city"
       >
@@ -54,6 +60,7 @@ export function CityDictionarySelect({ value, onChange }: Props) {
         </Text>
         <Ionicons name="chevron-down" size={20} color={warmHaze} />
       </Pressable>
+      {error ? <Text style={styles.fieldError}>{error}</Text> : null}
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={close}>
         <View style={styles.modalBackdrop}>
@@ -96,7 +103,7 @@ export function CityDictionarySelect({ value, onChange }: Props) {
                   onPress={() => pick(item)}
                 >
                   <Text style={[styles.rowText, item === value && styles.rowTextOn]}>{item}</Text>
-                  {item === value ? <Ionicons name="checkmark-circle" size={22} color={crunch} /> : null}
+                  {item === value ? <Ionicons name="checkmark-circle" size={22} color={themePrimary} /> : null}
                 </Pressable>
               )}
               style={styles.list}
@@ -116,7 +123,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#f3f3f5',
+    backgroundColor: themeSurfaceMuted,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
@@ -124,7 +131,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   triggerPressed: { opacity: 0.92 },
+  triggerError: { borderColor: '#b3261e' },
   triggerText: { flex: 1, fontSize: 16, color: lead, fontWeight: '600' },
+  fieldError: { marginTop: 4, fontSize: 13, fontWeight: '600', color: '#b3261e' },
   triggerPlaceholder: { color: warmHaze, fontWeight: '500' },
   modalBackdrop: {
     flex: 1,
@@ -154,7 +163,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   sheetTitle: { fontSize: 18, fontWeight: '800', color: lead },
-  sheetDone: { fontSize: 16, fontWeight: '800', color: crunch },
+  sheetDone: { fontSize: 16, fontWeight: '800', color: themePrimary },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -162,7 +171,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 12,
     borderRadius: 14,
-    backgroundColor: '#f3f3f5',
+    backgroundColor: themeSurfaceMuted,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
   },
