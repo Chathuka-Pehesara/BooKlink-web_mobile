@@ -1,5 +1,6 @@
 import { v2 as cloudinary } from 'cloudinary';
 
+/** Returns configured Cloudinary SDK (env: CLOUDINARY_*). */
 export function configureCloudinary() {
   cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
