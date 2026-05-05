@@ -1,10 +1,8 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,15 +20,10 @@ import type { WishlistItem } from '../types/wishlist';
 import type { WishlistHelpThread } from '../types/wishlistThread';
 import {
   cascadingWhite,
+  crunch,
   dreamland,
   lead,
   textSecondary,
-  themeDanger,
-  themeGreen,
-  themeInk,
-  themeOrange,
-  themePageBg,
-  themePrimary,
   warmHaze,
 } from '../theme/colors';
 import { cardShadow } from '../theme/shadows';
@@ -46,47 +39,30 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstFocusForItem = useRef(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get<{ item: WishlistItem }>(`/api/wishlist/${wishlistItemId}`);
+      const it = res.data.item;
+      setItem(it);
+      if (userId && it.ownerClerkUserId === userId) {
+        const tr = await api.get<{ threads: WishlistHelpThread[] }>(`/api/wishlist/${wishlistItemId}/threads`);
+        setThreads(tr.data.threads ?? []);
+      } else {
+        setThreads([]);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Could not load');
+    } finally {
+      setLoading(false);
+    }
+  }, [wishlistItemId, userId]);
 
   useEffect(() => {
-    firstFocusForItem.current = true;
-  }, [wishlistItemId]);
-
-  const load = useCallback(
-    async (opts?: { background?: boolean }) => {
-      const background = opts?.background ?? false;
-      if (!background) {
-        setLoading(true);
-      }
-      setError(null);
-      try {
-        const res = await api.get<{ item: WishlistItem }>(`/api/wishlist/${wishlistItemId}`);
-        const it = res.data.item;
-        setItem(it);
-        if (userId && it.ownerClerkUserId === userId) {
-          const tr = await api.get<{ threads: WishlistHelpThread[] }>(`/api/wishlist/${wishlistItemId}/threads`);
-          setThreads(tr.data.threads ?? []);
-        } else {
-          setThreads([]);
-        }
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Could not load');
-      } finally {
-        if (!background) {
-          setLoading(false);
-        }
-      }
-    },
-    [wishlistItemId, userId]
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      const background = !firstFocusForItem.current;
-      firstFocusForItem.current = false;
-      void load({ background });
-    }, [load])
-  );
+    void load();
+  }, [load]);
 
   const isOwner = !!item && !!userId && item.ownerClerkUserId === userId;
   const canOffer = !!item && !!userId && !isOwner && item.status === 'open';
@@ -107,7 +83,7 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
         peerAvatarUrl: it.ownerAvatarUrl,
       });
     } catch (e: unknown) {
-      Alert.alert('Error', apiErrorMessage(e, 'Could not open messages'));
+      Alert.alert('Error', apiErrorMessage(e, 'Could not open chat'));
     } finally {
       setBusy(false);
     }
@@ -139,7 +115,7 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
     const title = item.title;
     confirmDestructive({
       title: 'Delete wanted book?',
-      message: `"${title}" will be removed from the community board along with any offer threads.`,
+      message: `"${title}" will be removed from the community board along with any help chats.`,
       confirmLabel: 'Delete',
       onConfirm: () =>
         void (async () => {
@@ -155,30 +131,26 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
 
   if (loading) {
     return (
-      <View style={styles.flex}>
-        <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}>
+      <View style={[styles.flex, { paddingTop: Math.max(insets.top, 8) }]}>
+        <View style={styles.topBar}>
           <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color={lead} />
             <Text style={styles.backText}>Back</Text>
           </Pressable>
-          <Text style={styles.screenTitle}>Wanted book</Text>
-          <View style={{ width: 72 }} />
         </View>
-        <ActivityIndicator style={{ marginTop: 40 }} color={themePrimary} />
+        <ActivityIndicator style={{ marginTop: 40 }} color={crunch} />
       </View>
     );
   }
 
   if (error || !item) {
     return (
-      <View style={styles.flex}>
-        <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}>
+      <View style={[styles.flex, { paddingTop: Math.max(insets.top, 8) }]}>
+        <View style={styles.topBar}>
           <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color={lead} />
             <Text style={styles.backText}>Back</Text>
           </Pressable>
-          <Text style={styles.screenTitle}>Wanted book</Text>
-          <View style={{ width: 72 }} />
         </View>
         <Text style={styles.error}>{error || 'Not found'}</Text>
       </View>
@@ -190,9 +162,7 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
 
   return (
     <View style={styles.flex}>
-      <View
-        style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}
-      >
+      <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}>
         <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={lead} />
           <Text style={styles.backText}>Back</Text>
@@ -200,11 +170,7 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
         <Text style={styles.screenTitle}>Wanted book</Text>
         <View style={{ width: 72 }} />
       </View>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scroll}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {item.wantedBookPhoto ? (
           <Image source={{ uri: item.wantedBookPhoto }} style={styles.photo} resizeMode="cover" />
         ) : null}
@@ -215,12 +181,6 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
           <Text style={styles.label}>Posted by</Text>
           <Text style={styles.value}>{item.ownerDisplayName || 'Reader'}</Text>
         </View>
-        {item.year != null && Number.isFinite(item.year) ? (
-          <View style={styles.row}>
-            <Text style={styles.label}>Publication year</Text>
-            <Text style={styles.value}>{String(item.year)}</Text>
-          </View>
-        ) : null}
         <View style={styles.row}>
           <Text style={styles.label}>Urgency</Text>
           <Text style={[styles.badge, { backgroundColor: urgency.bg, color: urgency.color }]}>{item.urgency}</Text>
@@ -230,36 +190,31 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
           <View style={[styles.card, cardShadow]}>
             <Text style={styles.cardTitle}>Your wanted post</Text>
             <Text style={styles.cardBody}>
-              When someone has this book, they can message you here. Open a thread below to reply.
+              When someone has this book, they can message you here. Open a chat below to reply.
             </Text>
             {item.status === 'open' ? (
-              <View style={styles.ownerActionsCol}>
-                <View style={styles.ownerActionsTopRow}>
-                  <Pressable
-                    style={[styles.solidEditBtn, styles.actionBtnGrow, cardShadow]}
-                    onPress={() => navigation.navigate('PostWanted', { editItemId: item._id })}
-                  >
-                    <Ionicons name="create-outline" size={16} color={themeInk} />
-                    <Text style={styles.solidEditBtnTxt}>Edit</Text>
-                  </Pressable>
-                  <Pressable style={[styles.solidDangerBtn, styles.actionBtnGrow, cardShadow]} onPress={confirmDelete}>
-                    <Ionicons name="trash-outline" size={16} color={cascadingWhite} />
-                    <Text style={styles.solidDangerBtnTxt}>Delete</Text>
-                  </Pressable>
-                </View>
+              <View style={styles.ownerActionsRow}>
                 <Pressable
-                  style={[styles.solidFulfilledBtn, styles.solidBtnFull, cardShadow]}
-                  onPress={() => markFulfilled()}
+                  style={[styles.secondaryBtn, cardShadow]}
+                  onPress={() => navigation.navigate('PostWanted', { editItemId: item._id })}
                 >
-                  <Text style={styles.solidFulfilledBtnTxt}>Mark as fulfilled</Text>
+                  <Ionicons name="create-outline" size={16} color={lead} />
+                  <Text style={styles.secondaryBtnTxt}>Edit</Text>
+                </Pressable>
+                <Pressable style={[styles.deleteBtn, cardShadow]} onPress={confirmDelete}>
+                  <Ionicons name="trash-outline" size={16} color="#7a2e2e" />
+                  <Text style={styles.deleteBtnTxt}>Delete</Text>
+                </Pressable>
+                <Pressable style={[styles.secondaryBtn, cardShadow]} onPress={() => markFulfilled()}>
+                  <Text style={styles.secondaryBtnTxt}>Mark as fulfilled</Text>
                 </Pressable>
               </View>
             ) : (
               <View style={styles.ownerActionsRow}>
                 <Text style={styles.closed}>This post is fulfilled.</Text>
-                <Pressable style={[styles.solidDangerBtn, cardShadow]} onPress={confirmDelete}>
-                  <Ionicons name="trash-outline" size={16} color={cascadingWhite} />
-                  <Text style={styles.solidDangerBtnTxt}>Delete</Text>
+                <Pressable style={[styles.deleteBtn, cardShadow]} onPress={confirmDelete}>
+                  <Ionicons name="trash-outline" size={16} color="#7a2e2e" />
+                  <Text style={styles.deleteBtnTxt}>Delete</Text>
                 </Pressable>
               </View>
             )}
@@ -282,7 +237,7 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
                   <Ionicons name="chatbubble-ellipses-outline" size={22} color={lead} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.threadName}>{t.helperDisplayName || 'Reader'}</Text>
-                    <Text style={styles.threadHint}>Tap to open messages</Text>
+                    <Text style={styles.threadHint}>Tap to open chat</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={20} color={warmHaze} />
                 </Pressable>
@@ -297,8 +252,8 @@ export function WantedBookDetailScreen({ navigation, route }: Props) {
               {busy ? <ActivityIndicator color={lead} /> : <Text style={styles.primaryBtnTxt}>Message & offer this book</Text>}
             </Pressable>
             <Text style={styles.hint}>
-              Start a private thread with the person who wants it. You can coordinate a handoff and set a meet-up right
-              from the conversation.
+              Start a private chat with the person who wants it. You can coordinate a handoff and set a meet-up right
+              from the chat.
             </Text>
           </View>
         ) : null}
@@ -318,23 +273,11 @@ function urgencyStyle(u: WishlistItem['urgency']) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: themePageBg },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingBottom: 10,
-    backgroundColor: themePageBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: dreamland,
-    zIndex: 2,
-    ...Platform.select({ android: { elevation: 2 }, default: {} }),
-  },
+  flex: { flex: 1, backgroundColor: cascadingWhite },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 8 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, width: 88 },
   backText: { fontSize: 15, fontWeight: '600', color: lead },
   screenTitle: { fontSize: 17, fontWeight: '800', color: lead },
-  scrollView: { flex: 1, minHeight: 0 },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, gap: 14 },
   photo: { width: '100%', height: 200, borderRadius: 16, backgroundColor: '#eee' },
   title: { fontSize: 24, fontWeight: '800', color: lead, letterSpacing: -0.3 },
@@ -355,47 +298,31 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 17, fontWeight: '800', color: lead },
   cardBody: { fontSize: 14, color: textSecondary, lineHeight: 20 },
-  ownerActionsCol: { gap: 10 },
-  ownerActionsTopRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
-  ownerActionsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', alignItems: 'center' },
-  actionBtnGrow: { flex: 1, minWidth: 0, justifyContent: 'center' },
-  solidEditBtn: {
+  ownerActionsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  secondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: themeOrange,
-    paddingHorizontal: 14,
+    backgroundColor: '#f3f3f5',
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 12,
-    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: dreamland,
   },
-  solidEditBtnTxt: { fontSize: 14, fontWeight: '800', color: themeInk },
-  solidFulfilledBtn: {
+  secondaryBtnTxt: { fontSize: 14, fontWeight: '800', color: lead },
+  deleteBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: themeGreen,
-    paddingHorizontal: 14,
+    backgroundColor: '#fdeaea',
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 12,
-    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e8bcbc',
   },
-  solidFulfilledBtnTxt: { fontSize: 14, fontWeight: '800', color: cascadingWhite },
-  solidBtnFull: {
-    alignSelf: 'stretch',
-    justifyContent: 'center',
-  },
-  solidDangerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: themeDanger,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    justifyContent: 'center',
-  },
-  solidDangerBtnTxt: { fontSize: 14, fontWeight: '800', color: cascadingWhite },
+  deleteBtnTxt: { fontSize: 14, fontWeight: '800', color: '#7a2e2e' },
   closed: { fontSize: 14, color: warmHaze, fontWeight: '600', flex: 1 },
   noThreads: { fontSize: 14, color: warmHaze },
   threadRow: {
@@ -410,7 +337,7 @@ const styles = StyleSheet.create({
   threadHint: { fontSize: 12, color: warmHaze, marginTop: 2 },
   primaryBtn: {
     marginTop: 8,
-    backgroundColor: themePrimary,
+    backgroundColor: crunch,
     borderRadius: 20,
     paddingVertical: 16,
     alignItems: 'center',
@@ -419,5 +346,5 @@ const styles = StyleSheet.create({
   },
   primaryBtnTxt: { fontSize: 16, fontWeight: '800', color: lead },
   hint: { fontSize: 13, color: textSecondary, lineHeight: 19 },
-  error: { color: themeDanger, padding: 20 },
+  error: { color: '#b3261e', padding: 20 },
 });
