@@ -1,0 +1,423 @@
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useAuth } from '@clerk/clerk-expo';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { api, apiErrorMessage } from '../lib/api';
+import { confirmDestructive } from '../lib/platformAlert';
+import type { WishlistStackParamList } from '../navigation/wishlistStackTypes';
+import type { WishlistItem } from '../types/wishlist';
+import type { WishlistHelpThread } from '../types/wishlistThread';
+import {
+  cascadingWhite,
+  dreamland,
+  lead,
+  textSecondary,
+  themeDanger,
+  themeGreen,
+  themeInk,
+  themeOrange,
+  themePageBg,
+  themePrimary,
+  warmHaze,
+} from '../theme/colors';
+import { cardShadow } from '../theme/shadows';
+
+type Props = NativeStackScreenProps<WishlistStackParamList, 'WantedBookDetail'>;
+
+export function WantedBookDetailScreen({ navigation, route }: Props) {
+  const insets = useSafeAreaInsets();
+  const { userId } = useAuth();
+  const { wishlistItemId } = route.params;
+  const [item, setItem] = useState<WishlistItem | null>(null);
+  const [threads, setThreads] = useState<WishlistHelpThread[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const firstFocusForItem = useRef(true);
+
+  useEffect(() => {
+    firstFocusForItem.current = true;
+  }, [wishlistItemId]);
+
+  const load = useCallback(
+    async (opts?: { background?: boolean }) => {
+      const background = opts?.background ?? false;
+      if (!background) {
+        setLoading(true);
+      }
+      setError(null);
+      try {
+        const res = await api.get<{ item: WishlistItem }>(`/api/wishlist/${wishlistItemId}`);
+        const it = res.data.item;
+        setItem(it);
+        if (userId && it.ownerClerkUserId === userId) {
+          const tr = await api.get<{ threads: WishlistHelpThread[] }>(`/api/wishlist/${wishlistItemId}/threads`);
+          setThreads(tr.data.threads ?? []);
+        } else {
+          setThreads([]);
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not load');
+      } finally {
+        if (!background) {
+          setLoading(false);
+        }
+      }
+    },
+    [wishlistItemId, userId]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const background = !firstFocusForItem.current;
+      firstFocusForItem.current = false;
+      void load({ background });
+    }, [load])
+  );
+
+  const isOwner = !!item && !!userId && item.ownerClerkUserId === userId;
+  const canOffer = !!item && !!userId && !isOwner && item.status === 'open';
+
+  const startChat = async () => {
+    if (!item) return;
+    setBusy(true);
+    try {
+      const res = await api.post<{
+        thread: { _id: string };
+        item: WishlistItem;
+      }>(`/api/wishlist/${item._id}/chat`);
+      const { thread, item: it } = res.data;
+      navigation.navigate('WishlistThreadChat', {
+        threadId: thread._id,
+        itemTitle: it.title,
+        peerName: it.ownerDisplayName || 'Reader',
+        peerAvatarUrl: it.ownerAvatarUrl,
+      });
+    } catch (e: unknown) {
+      Alert.alert('Error', apiErrorMessage(e, 'Could not open messages'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const markFulfilled = () => {
+    if (!item) return;
+    const itemId = item._id;
+    confirmDestructive({
+      title: 'Mark fulfilled?',
+      message: 'Hide this wanted post from the community board.',
+      confirmLabel: 'Mark fulfilled',
+      confirmStyle: 'default',
+      onConfirm: () =>
+        void (async () => {
+          try {
+            await api.put(`/api/wishlist/${itemId}`, { status: 'fulfilled' });
+            navigation.goBack();
+          } catch (e: unknown) {
+            Alert.alert('Error', apiErrorMessage(e, 'Could not update'));
+          }
+        })(),
+    });
+  };
+
+  const confirmDelete = () => {
+    if (!item) return;
+    const itemId = item._id;
+    const title = item.title;
+    confirmDestructive({
+      title: 'Delete wanted book?',
+      message: `"${title}" will be removed from the community board along with any offer threads.`,
+      confirmLabel: 'Delete',
+      onConfirm: () =>
+        void (async () => {
+          try {
+            await api.delete(`/api/wishlist/${itemId}`);
+            navigation.goBack();
+          } catch (e: unknown) {
+            Alert.alert('Error', apiErrorMessage(e, 'Could not delete'));
+          }
+        })(),
+    });
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.flex}>
+        <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}>
+          <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={24} color={lead} />
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
+          <Text style={styles.screenTitle}>Wanted book</Text>
+          <View style={{ width: 72 }} />
+        </View>
+        <ActivityIndicator style={{ marginTop: 40 }} color={themePrimary} />
+      </View>
+    );
+  }
+
+  if (error || !item) {
+    return (
+      <View style={styles.flex}>
+        <View style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}>
+          <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={24} color={lead} />
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
+          <Text style={styles.screenTitle}>Wanted book</Text>
+          <View style={{ width: 72 }} />
+        </View>
+        <Text style={styles.error}>{error || 'Not found'}</Text>
+      </View>
+    );
+  }
+
+  const meta = [item.author, item.subject, item.language].filter(Boolean).join(' · ');
+  const urgency = urgencyStyle(item.urgency);
+
+  return (
+    <View style={styles.flex}>
+      <View
+        style={[styles.topBar, { paddingTop: Math.max(insets.top, 8) }]}
+      >
+        <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={24} color={lead} />
+          <Text style={styles.backText}>Back</Text>
+        </Pressable>
+        <Text style={styles.screenTitle}>Wanted book</Text>
+        <View style={{ width: 72 }} />
+      </View>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+      >
+        {item.wantedBookPhoto ? (
+          <Image source={{ uri: item.wantedBookPhoto }} style={styles.photo} resizeMode="cover" />
+        ) : null}
+        <Text style={styles.title}>{item.title}</Text>
+        {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+        {item.description ? <Text style={styles.desc}>{item.description}</Text> : null}
+        <View style={styles.row}>
+          <Text style={styles.label}>Posted by</Text>
+          <Text style={styles.value}>{item.ownerDisplayName || 'Reader'}</Text>
+        </View>
+        {item.year != null && Number.isFinite(item.year) ? (
+          <View style={styles.row}>
+            <Text style={styles.label}>Publication year</Text>
+            <Text style={styles.value}>{String(item.year)}</Text>
+          </View>
+        ) : null}
+        <View style={styles.row}>
+          <Text style={styles.label}>Urgency</Text>
+          <Text style={[styles.badge, { backgroundColor: urgency.bg, color: urgency.color }]}>{item.urgency}</Text>
+        </View>
+
+        {isOwner ? (
+          <View style={[styles.card, cardShadow]}>
+            <Text style={styles.cardTitle}>Your wanted post</Text>
+            <Text style={styles.cardBody}>
+              When someone has this book, they can message you here. Open a thread below to reply.
+            </Text>
+            {item.status === 'open' ? (
+              <View style={styles.ownerActionsCol}>
+                <View style={styles.ownerActionsTopRow}>
+                  <Pressable
+                    style={[styles.solidEditBtn, styles.actionBtnGrow, cardShadow]}
+                    onPress={() => navigation.navigate('PostWanted', { editItemId: item._id })}
+                  >
+                    <Ionicons name="create-outline" size={16} color={themeInk} />
+                    <Text style={styles.solidEditBtnTxt}>Edit</Text>
+                  </Pressable>
+                  <Pressable style={[styles.solidDangerBtn, styles.actionBtnGrow, cardShadow]} onPress={confirmDelete}>
+                    <Ionicons name="trash-outline" size={16} color={cascadingWhite} />
+                    <Text style={styles.solidDangerBtnTxt}>Delete</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  style={[styles.solidFulfilledBtn, styles.solidBtnFull, cardShadow]}
+                  onPress={() => markFulfilled()}
+                >
+                  <Text style={styles.solidFulfilledBtnTxt}>Mark as fulfilled</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.ownerActionsRow}>
+                <Text style={styles.closed}>This post is fulfilled.</Text>
+                <Pressable style={[styles.solidDangerBtn, cardShadow]} onPress={confirmDelete}>
+                  <Ionicons name="trash-outline" size={16} color={cascadingWhite} />
+                  <Text style={styles.solidDangerBtnTxt}>Delete</Text>
+                </Pressable>
+              </View>
+            )}
+            {threads.length === 0 ? (
+              <Text style={styles.noThreads}>No messages yet.</Text>
+            ) : (
+              threads.map((t) => (
+                <Pressable
+                  key={t._id}
+                  style={styles.threadRow}
+                  onPress={() =>
+                    navigation.navigate('WishlistThreadChat', {
+                      threadId: t._id,
+                      itemTitle: item.title,
+                      peerName: t.helperDisplayName || 'Reader',
+                      peerAvatarUrl: t.helperAvatarUrl,
+                    })
+                  }
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={22} color={lead} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.threadName}>{t.helperDisplayName || 'Reader'}</Text>
+                    <Text style={styles.threadHint}>Tap to open messages</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={warmHaze} />
+                </Pressable>
+              ))
+            )}
+          </View>
+        ) : null}
+
+        {canOffer ? (
+          <View style={{ gap: 12 }}>
+            <Pressable style={[styles.primaryBtn, cardShadow]} onPress={() => void startChat()} disabled={busy}>
+              {busy ? <ActivityIndicator color={lead} /> : <Text style={styles.primaryBtnTxt}>Message & offer this book</Text>}
+            </Pressable>
+            <Text style={styles.hint}>
+              Start a private thread with the person who wants it. You can coordinate a handoff and set a meet-up right
+              from the conversation.
+            </Text>
+          </View>
+        ) : null}
+
+        {!userId ? (
+          <Text style={styles.hint}>Sign in to message someone about a wanted book.</Text>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function urgencyStyle(u: WishlistItem['urgency']) {
+  if (u === 'high') return { color: '#b3261e', bg: '#fcebeb' };
+  if (u === 'medium') return { color: '#854f0b', bg: '#faeeda' };
+  return { color: '#27500a', bg: '#eaf3de' };
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: themePageBg },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    backgroundColor: themePageBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: dreamland,
+    zIndex: 2,
+    ...Platform.select({ android: { elevation: 2 }, default: {} }),
+  },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, width: 88 },
+  backText: { fontSize: 15, fontWeight: '600', color: lead },
+  screenTitle: { fontSize: 17, fontWeight: '800', color: lead },
+  scrollView: { flex: 1, minHeight: 0 },
+  scroll: { paddingHorizontal: 20, paddingBottom: 40, gap: 14 },
+  photo: { width: '100%', height: 200, borderRadius: 16, backgroundColor: '#eee' },
+  title: { fontSize: 24, fontWeight: '800', color: lead, letterSpacing: -0.3 },
+  meta: { fontSize: 15, color: textSecondary, lineHeight: 22 },
+  desc: { fontSize: 14, color: textSecondary, lineHeight: 21 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  label: { fontSize: 14, color: warmHaze, fontWeight: '700' },
+  value: { fontSize: 15, fontWeight: '700', color: lead, flex: 1, textAlign: 'right' },
+  badge: { fontSize: 13, fontWeight: '800', textTransform: 'capitalize', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, overflow: 'hidden' },
+  card: {
+    marginTop: 8,
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: cascadingWhite,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: dreamland,
+    gap: 12,
+  },
+  cardTitle: { fontSize: 17, fontWeight: '800', color: lead },
+  cardBody: { fontSize: 14, color: textSecondary, lineHeight: 20 },
+  ownerActionsCol: { gap: 10 },
+  ownerActionsTopRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
+  ownerActionsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', alignItems: 'center' },
+  actionBtnGrow: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  solidEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: themeOrange,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
+  },
+  solidEditBtnTxt: { fontSize: 14, fontWeight: '800', color: themeInk },
+  solidFulfilledBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: themeGreen,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
+  },
+  solidFulfilledBtnTxt: { fontSize: 14, fontWeight: '800', color: cascadingWhite },
+  solidBtnFull: {
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  solidDangerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: themeDanger,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
+  },
+  solidDangerBtnTxt: { fontSize: 14, fontWeight: '800', color: cascadingWhite },
+  closed: { fontSize: 14, color: warmHaze, fontWeight: '600', flex: 1 },
+  noThreads: { fontSize: 14, color: warmHaze },
+  threadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: dreamland,
+  },
+  threadName: { fontSize: 16, fontWeight: '800', color: lead },
+  threadHint: { fontSize: 12, color: warmHaze, marginTop: 2 },
+  primaryBtn: {
+    marginTop: 8,
+    backgroundColor: themePrimary,
+    borderRadius: 20,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: dreamland,
+  },
+  primaryBtnTxt: { fontSize: 16, fontWeight: '800', color: lead },
+  hint: { fontSize: 13, color: textSecondary, lineHeight: 19 },
+  error: { color: themeDanger, padding: 20 },
+});

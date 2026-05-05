@@ -23,6 +23,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatImageLightbox } from '../components/ChatImageLightbox';
 import { ChatMessageRow } from '../components/ChatMessageRow';
+import { MeetupDateTimePickers } from '../components/MeetupDateTimePickers';
 import { api, apiErrorMessage } from '../lib/api';
 import { pickChatImageFromLibrary } from '../lib/pickChatImage';
 import { uploadChatImage } from '../lib/uploadChatImage';
@@ -31,16 +32,27 @@ import type { WishlistStackParamList } from '../navigation/wishlistStackTypes';
 import type { WishlistThreadDetail } from '../types/wishlistThread';
 import type { CollectionPoint } from '../types/point';
 import {
-  cascadingWhite,
-  chatComposerBar,
-  chatSendActive,
-  chatWallpaper,
-  crunch,
-  dreamland,
-  lead,
-  textSecondary,
-  warmHaze,
-} from '../theme/colors';
+  messengerComposerBg,
+  messengerHintBg,
+  messengerInputFill,
+  messengerMeetupBannerBg,
+  messengerMeetupBannerBorder,
+  messengerPrimaryActionBg,
+  messengerScreenBg,
+  messengerSendActive,
+  messengerThreadBg,
+  messengerTopHairline,
+} from '../theme/chatMessengerTheme';
+import { cascadingWhite, dreamland, lead, textSecondary, warmHaze, themeSurfaceMuted } from '../theme/colors';
+import { themeGreen, themeMuted } from '../theme/courseTheme';
+import {
+  combineLocalDateTimeToISO,
+  defaultMeetupWhenDate,
+  localDateToMeetupStrings,
+  meetupContactValidationError,
+  meetupDateTimeFutureError,
+  sanitizeMeetupPhoneDigits,
+} from '../lib/meetupFormRules';
 
 type Props = NativeStackScreenProps<WishlistStackParamList, 'WishlistThreadChat'>;
 
@@ -54,38 +66,6 @@ type ThreadMessage = {
   imageUrl?: string;
   createdAt?: string;
 };
-
-function pad2(n: number) {
-  return n < 10 ? `0${n}` : String(n);
-}
-
-function defaultMeetupDateStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-function defaultMeetupTimeStr() {
-  const d = new Date();
-  d.setMinutes(0, 0, 0);
-  d.setHours(d.getHours() + 1);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function combineLocalDateTimeToISO(dateStr: string, timeStr: string): string | null {
-  const dPart = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
-  const tPart = /^(\d{1,2}):(\d{2})$/.exec(timeStr.trim());
-  if (!dPart || !tPart) return null;
-  const y = Number(dPart[1]);
-  const mo = Number(dPart[2]);
-  const day = Number(dPart[3]);
-  const hh = Number(tPart[1]);
-  const mm = Number(tPart[2]);
-  if (![y, mo, day, hh, mm].every((n) => Number.isFinite(n))) return null;
-  if (hh > 23 || hh < 0 || mm > 59 || mm < 0) return null;
-  const dt = new Date(y, mo - 1, day, hh, mm, 0, 0);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt.toISOString();
-}
 
 function formatMeetupWhen(iso?: string | null) {
   if (!iso) return '';
@@ -120,8 +100,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
   const [meetupModal, setMeetupModal] = useState(false);
   const [meetupStep, setMeetupStep] = useState<'pick' | 'details'>('pick');
   const [selectedPoint, setSelectedPoint] = useState<CollectionPoint | null>(null);
-  const [meetupDateStr, setMeetupDateStr] = useState('');
-  const [meetupTimeStr, setMeetupTimeStr] = useState('');
+  const [meetupWhen, setMeetupWhen] = useState<Date>(() => defaultMeetupWhenDate());
   const [meetupContactStr, setMeetupContactStr] = useState('');
   const [meetupError, setMeetupError] = useState<string | null>(null);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
@@ -136,8 +115,9 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
       setThread(threadRes.data.thread ?? null);
       setMessages(msgRes.data.messages ?? []);
       setError(null);
+      void api.post(`/api/chats/wishlist-thread/${threadId}/read`).catch(() => {});
     } catch (e: unknown) {
-      setError(apiErrorMessage(e, 'Could not load chat'));
+      setError(apiErrorMessage(e, 'Could not load messages'));
     } finally {
       setLoading(false);
     }
@@ -215,8 +195,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
     void loadPoints();
     setMeetupStep('pick');
     setSelectedPoint(null);
-    setMeetupDateStr(defaultMeetupDateStr());
-    setMeetupTimeStr(defaultMeetupTimeStr());
+    setMeetupWhen(defaultMeetupWhenDate());
     setMeetupContactStr('');
     setMeetupError(null);
     setMeetupBusy(false);
@@ -225,9 +204,8 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
 
   const goMeetupDetails = (p: CollectionPoint) => {
     setSelectedPoint(p);
-    setMeetupDateStr(defaultMeetupDateStr());
-    setMeetupTimeStr(defaultMeetupTimeStr());
-    setMeetupContactStr(p.contactNumber?.trim() || '');
+    setMeetupWhen(defaultMeetupWhenDate());
+    setMeetupContactStr(sanitizeMeetupPhoneDigits(p.contactNumber ?? ''));
     setMeetupError(null);
     setMeetupStep('details');
   };
@@ -239,18 +217,25 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
       alertOk('Meet-up', msg);
       return;
     }
-    const meetupAt = combineLocalDateTimeToISO(meetupDateStr, meetupTimeStr);
+    const { dateStr, timeStr } = localDateToMeetupStrings(meetupWhen);
+    const whenErr = meetupDateTimeFutureError(dateStr, timeStr);
+    if (whenErr) {
+      setMeetupError(whenErr);
+      alertOk('Date & time', whenErr);
+      return;
+    }
+    const contactDigits = sanitizeMeetupPhoneDigits(meetupContactStr);
+    const contactErr = meetupContactValidationError(contactDigits);
+    if (contactErr) {
+      setMeetupError(contactErr);
+      alertOk('Contact', contactErr);
+      return;
+    }
+    const meetupAt = combineLocalDateTimeToISO(dateStr, timeStr);
     if (!meetupAt) {
       const msg = 'Use date as YYYY-MM-DD and time as HH:mm (24-hour), e.g. 14:30.';
       setMeetupError(msg);
       alertOk('Date & time', msg);
-      return;
-    }
-    const contact = meetupContactStr.trim();
-    if (contact.length < 5) {
-      const msg = 'Enter a contact number (at least 5 characters).';
-      setMeetupError(msg);
-      alertOk('Contact', msg);
       return;
     }
     setMeetupError(null);
@@ -259,7 +244,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
       await api.patch(`/api/wishlist/threads/${threadId}/meetup`, {
         collectionPointId: selectedPoint._id,
         meetupAt,
-        meetupContactNumber: contact,
+        meetupContactNumber: contactDigits,
       });
       closeMeetupModal();
       await load();
@@ -276,7 +261,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
 
   const leaveChat = useCallback(() => {
     if (returnToChatsInbox) {
-      navigation.getParent()?.navigate('Requests', { screen: 'ChatsInbox' });
+      navigation.getParent()?.navigate('Wishlist', { screen: 'WishlistChats' });
       return;
     }
     navigation.dispatch(
@@ -306,7 +291,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
         <Avatar name={peerName || 'Reader'} uri={peerAvatarUrl} size={34} />
         <View style={styles.headTxtWrap}>
           <Text style={styles.headTitle} numberOfLines={1}>
-            {peerName || 'Chat'}
+            {peerName || 'Exchange'}
           </Text>
           <Text style={styles.headSub} numberOfLines={1}>
             {subtitle}
@@ -330,7 +315,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
               onPress={() => {
                 const raw = thread.meetupContactNumber ?? '';
                 const tel = raw.replace(/[^\d+]/g, '');
-                if (tel.length >= 5) void Linking.openURL(`tel:${tel}`);
+                if (tel.length >= 10) void Linking.openURL(`tel:${tel}`);
               }}
               style={styles.meetupContactRow}
             >
@@ -345,7 +330,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
                 void openGoogleMapsDirections(thread.meetupLatitude as number, thread.meetupLongitude as number)
               }
             >
-              <Ionicons name="navigate-outline" size={16} color={lead} />
+              <Ionicons name="navigate-outline" size={16} color={cascadingWhite} />
               <Text style={styles.dirBtnTxt}>Directions</Text>
             </Pressable>
           ) : (
@@ -362,7 +347,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
         <View style={styles.meetupHint}>
           <Text style={styles.meetupHintTxt}>
             If you have the book, set the meet-up: pick a collection point, then add date, time, and a contact
-            number. The summary is sent in chat for both of you.
+            number. The summary is sent in this thread for both of you.
           </Text>
         </View>
       ) : null}
@@ -370,10 +355,10 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
       {isHelper ? (
         <Pressable style={styles.setMeetupBtn} onPress={() => openMeetupModal()} disabled={meetupBusy}>
           {meetupBusy ? (
-            <ActivityIndicator color={lead} size="small" />
+            <ActivityIndicator color={cascadingWhite} size="small" />
           ) : (
             <>
-              <Ionicons name="location-outline" size={20} color={lead} />
+              <Ionicons name="location-outline" size={20} color={cascadingWhite} />
               <Text style={styles.setMeetupTxt}>
                 {thread?.meetupHandoffLabel ? 'Change meet-up point' : 'Set meet-up point'}
               </Text>
@@ -388,7 +373,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
       >
         {loading ? (
           <View style={styles.chatPane}>
-            <ActivityIndicator style={{ marginTop: 30 }} color={crunch} />
+            <ActivityIndicator style={{ marginTop: 30 }} color={themeGreen} />
           </View>
         ) : (
           <ScrollView
@@ -433,7 +418,7 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
             value={text}
             onChangeText={setText}
             placeholder="Write a message..."
-            placeholderTextColor={warmHaze}
+            placeholderTextColor={themeMuted}
             multiline
             maxLength={2000}
           />
@@ -491,39 +476,24 @@ export function WishlistThreadChatScreen({ navigation, route }: Props) {
                   </View>
                 ) : null}
                 <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 360 }}>
-                  <View style={styles.modalField}>
-                    <Text style={styles.modalFieldLabel}>Date</Text>
-                    <TextInput
-                      value={meetupDateStr}
-                      onChangeText={setMeetupDateStr}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor={warmHaze}
-                      style={styles.modalInput}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                  </View>
-                  <View style={styles.modalField}>
-                    <Text style={styles.modalFieldLabel}>Time (24h)</Text>
-                    <TextInput
-                      value={meetupTimeStr}
-                      onChangeText={setMeetupTimeStr}
-                      placeholder="HH:mm"
-                      placeholderTextColor={warmHaze}
-                      style={styles.modalInput}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                  </View>
+                  <MeetupDateTimePickers
+                    value={meetupWhen}
+                    onChange={setMeetupWhen}
+                    disabled={meetupBusy}
+                    dateHint="Must be today or a future calendar day."
+                    timeHint="Together with date, cannot be in the past."
+                  />
                   <View style={styles.modalField}>
                     <Text style={styles.modalFieldLabel}>Your contact number</Text>
                     <TextInput
                       value={meetupContactStr}
-                      onChangeText={setMeetupContactStr}
-                      placeholder="Shown to the other reader for this handoff"
-                      placeholderTextColor={warmHaze}
+                      onChangeText={(t) => setMeetupContactStr(sanitizeMeetupPhoneDigits(t))}
+                      placeholder="10 digits — e.g. 0770123456"
+                      placeholderTextColor={themeMuted}
                       style={styles.modalInput}
-                      keyboardType="phone-pad"
+                      keyboardType="number-pad"
+                      maxLength={10}
+                      inputMode="numeric"
                     />
                   </View>
                   <Text style={styles.modalHint}>Times use your device’s local timezone.</Text>
@@ -586,8 +556,8 @@ function Avatar({ name, uri, size }: { name: string; uri?: string; size: number 
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: cascadingWhite },
-  chatPane: { flex: 1, backgroundColor: chatWallpaper },
+  flex: { flex: 1, backgroundColor: messengerScreenBg },
+  chatPane: { flex: 1, backgroundColor: messengerThreadBg },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -597,7 +567,7 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: cascadingWhite,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: dreamland,
+    borderBottomColor: messengerTopHairline,
   },
   backBtn: {
     width: 44,
@@ -616,9 +586,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     padding: 12,
     borderRadius: 14,
-    backgroundColor: '#eaf3de',
+    backgroundColor: messengerMeetupBannerBg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c0dd97',
+    borderColor: messengerMeetupBannerBorder,
     gap: 6,
   },
   meetupLabel: { fontSize: 11, fontWeight: '800', color: warmHaze, textTransform: 'uppercase' },
@@ -639,7 +609,16 @@ const styles = StyleSheet.create({
     borderColor: dreamland,
   },
   meetupContactTxt: { fontSize: 15, fontWeight: '800', color: lead },
-  meetupHint: { marginHorizontal: 12, marginTop: 8, marginBottom: 6, padding: 10, borderRadius: 12, backgroundColor: '#f3f3f5' },
+  meetupHint: {
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 6,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: messengerHintBg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: messengerMeetupBannerBorder,
+  },
   meetupHintTxt: { fontSize: 13, color: textSecondary, lineHeight: 18 },
   setMeetupBtn: {
     flexDirection: 'row',
@@ -650,18 +629,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingVertical: 12,
     borderRadius: 14,
-    backgroundColor: crunch,
+    backgroundColor: messengerPrimaryActionBg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: dreamland,
+    borderColor: messengerMeetupBannerBorder,
   },
-  setMeetupTxt: { fontSize: 14, fontWeight: '800', color: lead },
+  setMeetupTxt: { fontSize: 14, fontWeight: '800', color: cascadingWhite },
   dirBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     alignSelf: 'flex-start',
     marginTop: 4,
-    backgroundColor: crunch,
+    backgroundColor: messengerPrimaryActionBg,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
@@ -679,14 +658,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
   },
-  dirBtnTxt: { fontSize: 13, fontWeight: '800', color: lead },
+  dirBtnTxt: { fontSize: 13, fontWeight: '800', color: cascadingWhite },
   dirBtnTxtMuted: { fontSize: 13, fontWeight: '700', color: textSecondary },
   msgList: {
     flexGrow: 1,
     paddingHorizontal: 12,
     paddingTop: 12,
     paddingBottom: 16,
-    backgroundColor: chatWallpaper,
+    backgroundColor: messengerThreadBg,
   },
   avatarFallback: {
     alignItems: 'center',
@@ -706,8 +685,8 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: dreamland,
-    backgroundColor: chatComposerBar,
+    borderTopColor: messengerTopHairline,
+    backgroundColor: messengerComposerBg,
   },
   attachBtn: {
     width: 44,
@@ -723,14 +702,14 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 44,
     maxHeight: 120,
-    backgroundColor: '#fff',
+    backgroundColor: messengerInputFill,
     borderRadius: 22,
     paddingHorizontal: 14,
     paddingVertical: 10,
     color: lead,
     fontSize: 15,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: dreamland,
+    borderColor: messengerTopHairline,
   },
   sendBtn: {
     width: 44,
@@ -739,7 +718,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendBtnActive: { backgroundColor: chatSendActive },
+  sendBtnActive: { backgroundColor: messengerSendActive },
   sendBtnDisabled: { backgroundColor: '#fff', borderWidth: StyleSheet.hairlineWidth, borderColor: dreamland, opacity: 0.85 },
   sendBtnOff: { opacity: 0.5 },
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
@@ -757,7 +736,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     padding: 12,
     borderRadius: 14,
-    backgroundColor: '#f3f3f5',
+    backgroundColor: themeSurfaceMuted,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
     gap: 4,
@@ -766,8 +745,14 @@ const styles = StyleSheet.create({
   detailsSummaryTxt: { fontSize: 15, fontWeight: '800', color: lead },
   modalField: { marginBottom: 14 },
   modalFieldLabel: { fontSize: 13, fontWeight: '800', color: warmHaze, marginBottom: 6 },
+  modalFieldMicro: {
+    marginTop: 6,
+    fontSize: 12,
+    color: textSecondary,
+    lineHeight: 16,
+  },
   modalInput: {
-    backgroundColor: '#f3f3f5',
+    backgroundColor: themeSurfaceMuted,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: dreamland,
@@ -800,7 +785,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
     alignItems: 'center',
-    backgroundColor: lead,
+    backgroundColor: messengerPrimaryActionBg,
   },
   modalConfirmBtnOff: { opacity: 0.7 },
   modalConfirmBtnTxt: { fontSize: 15, fontWeight: '800', color: cascadingWhite },
